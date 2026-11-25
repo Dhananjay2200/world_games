@@ -46,7 +46,7 @@ export default function UserPortal() {
       if (selectedDate) params.append('date', selectedDate);
       if (searchQuery.trim()) params.append('search', searchQuery.trim());
 
-      const res = await fetch(`/api/v1/publish/feed?${params.toString()}`);
+      const res = await fetch(`https://world-games-lhi1.onrender.com/api/v1/publish/feed?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setArticles(data.articles || []);
