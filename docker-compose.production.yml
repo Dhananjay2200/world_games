@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # Layer 1: High-Concurrency Edge Reverse Proxy & Micro-Cache
+  nginx:
+    image: nginx:alpine
+    container_name: worldgames_edge_proxy
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_cache:/var/cache/nginx/worldgames
+    depends_on:
+      - backend
+    networks:
+      - worldgames_net
+
+  # Layer 2: Auto-Scalable FastAPI Backend Workers Cluster
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      - APP_ENV=production
+      - DEBUG=false
+      - HOST=0.0.0.0
+      - PORT=8001
+      - DATABASE_URL=postgresql+psycopg2://postgres:${POSTGRES_PASSWORD:-Dk#22000}@postgres:5432/world_games_ai
+      - DB_POOL_SIZE=50
+      - DB_MAX_OVERFLOW=100
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+      - NVIDIA_MODEL_NAME=nvidia/nemotron-3.5-bolt-e4b
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - worldgames_net
+
+  # Layer 3: High-Speed In-Memory Cache
+  redis:
+    image: redis:7-alpine
+    container_name: worldgames_redis
+    restart: always
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save ""
+    networks:
+      - worldgames_net
+
+  # Layer 4: Production PostgreSQL with High-Connection Tuning
+  postgres:
+    image: postgres:16-alpine
+    container_name: worldgames_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Dk#22000}
+      POSTGRES_DB: world_games_ai
+    command: >
+      postgres
+      -c max_connections=300
+      -c shared_buffers=512MB
+      -c effective_cache_size=1536MB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c work_mem=16MB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - worldgames_net
+
+networks:
+  worldgames_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  nginx_cache:
