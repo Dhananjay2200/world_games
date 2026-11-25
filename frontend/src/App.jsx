@@ -3,6 +3,7 @@ import Navbar from './components/Navbar';
 import UserPortal from './components/UserPortal';
 import AdminPortal from './components/AdminPortal';
 import { Trophy, Globe2, Shield, Heart, Zap } from 'lucide-react';
+import { apiUrl } from './config';
 
 export default function App() {
   const [currentView, setCurrentView] = useState('user'); // 'user' or 'admin'
@@ -12,7 +13,7 @@ export default function App() {
   // Fetch real-time system stats
   const fetchStats = async () => {
     try {
-      const res = await fetch('https://world-games-lhi1.onrender.com/api/v1/publish/stats');
+      const res = await fetch(apiUrl('/api/v1/publish/stats'));
       if (res.ok) {
         const data = await res.json();
         setStats(data);

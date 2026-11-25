@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { CATEGORY_CONFIG, REGIONS, getCategoryConfig } from '../utils/sportsIcons';
 import PlaybookModal from './PlaybookModal';
+import { apiUrl } from '../config';
 
 export default function AdminPortal({ stats, onRefreshStats }) {
   // Authentication State
@@ -65,7 +66,7 @@ export default function AdminPortal({ stats, onRefreshStats }) {
     }
 
     try {
-      const res = await fetch('/api/v1/auth/login', {
+      const res = await fetch(apiUrl('/api/v1/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: cleanUser, password: cleanPass }),
@@ -99,9 +100,9 @@ export default function AdminPortal({ stats, onRefreshStats }) {
   const fetchAdminArticles = async () => {
     setLoading(true);
     try {
-      let url = '/api/v1/articles?limit=100';
+      let url = apiUrl('/api/v1/articles?limit=100');
       if (activeTab === 'IN_REVIEW') {
-        url = '/api/v1/publish/review-queue?limit=100';
+        url = apiUrl('/api/v1/publish/review-queue?limit=100');
       }
 
       const res = await fetch(url);
@@ -145,7 +146,7 @@ export default function AdminPortal({ stats, onRefreshStats }) {
   const handleBatchPublish = async () => {
     if (selectedIds.length === 0) return;
     try {
-      const res = await fetch('/api/v1/publish/batch', {
+      const res = await fetch(apiUrl('/api/v1/publish/batch'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -168,7 +169,7 @@ export default function AdminPortal({ stats, onRefreshStats }) {
   // Single Publish
   const handleSinglePublish = async (id) => {
     try {
-      const res = await fetch(`/api/v1/publish/${id}`, {
+      const res = await fetch(apiUrl(`/api/v1/publish/${id}`), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -186,7 +187,7 @@ export default function AdminPortal({ stats, onRefreshStats }) {
   const handleDeleteArticle = async (id) => {
     if (!window.confirm(`Are you sure you want to delete article ${id}?`)) return;
     try {
-      const res = await fetch(`/api/v1/publish/${id}`, {
+      const res = await fetch(apiUrl(`/api/v1/publish/${id}`), {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -214,7 +215,7 @@ export default function AdminPortal({ stats, onRefreshStats }) {
         news_angle: genArticleType === 'NEWS' ? genNewsAngle : undefined,
       };
 
-      const res = await fetch('/api/v1/workflow/run', {
+      const res = await fetch(apiUrl('/api/v1/workflow/run'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -240,7 +241,7 @@ export default function AdminPortal({ stats, onRefreshStats }) {
   // Automation Daemon Toggle
   const toggleAutomation = async (start) => {
     try {
-      const endpoint = start ? '/api/v1/automation/start' : '/api/v1/automation/stop';
+      const endpoint = apiUrl(start ? '/api/v1/automation/start' : '/api/v1/automation/stop');
       const body = start ? JSON.stringify({ interval_seconds: 300 }) : undefined;
       const res = await fetch(endpoint, {
         method: 'POST',
