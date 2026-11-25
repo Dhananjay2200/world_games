@@ -12,7 +12,7 @@ export default function App() {
   // Fetch real-time system stats
   const fetchStats = async () => {
     try {
-      const res = await fetch('/api/v1/publish/stats');
+      const res = await fetch('https://world-games-lhi1.onrender.com/api/v1/publish/stats');
       if (res.ok) {
         const data = await res.json();
         setStats(data);
