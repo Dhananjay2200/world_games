@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Shield,
   Trophy,
@@ -50,6 +50,71 @@ export default function AdminPortal({ stats, onRefreshStats }) {
   const [genCategory, setGenCategory] = useState('Indigenous, Folk & Traditional Games');
   const [isGenerating, setIsGenerating] = useState(false);
 
+  // Live 1-second clock tick for Next Post & 1-Day Reset countdown timers
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const tick = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, []);
+
+  const parseUtcIso = (isoStr) => {
+    if (!isoStr) return null;
+    const hasZone = /([zZ]|[+-]\d{2}:\d{2})$/.test(isoStr);
+    const parsed = new Date(hasZone ? isoStr : `${isoStr}Z`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
+  };
+
+  const formatDuration = (totalSeconds, alwaysHours = false) => {
+    const secs = Math.max(0, Math.floor(totalSeconds));
+    const hrs = Math.floor(secs / 3600);
+    const mins = Math.floor((secs % 3600) / 60);
+    const rem = secs % 60;
+    if (alwaysHours || hrs > 0) {
+      return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+    }
+    return `${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+  };
+
+  const getNextPostTimer = () => {
+    if (!stats?.is_automation_running) {
+      return { value: 'Paused', sub: 'Start daemon to schedule', active: false };
+    }
+    const nextRunMs = parseUtcIso(stats?.next_run_at);
+    if (!nextRunMs) {
+      return { value: '05:00', sub: 'Scheduled cycle queued', active: true };
+    }
+    const diffSecs = Math.floor((nextRunMs - nowMs) / 1000);
+    if (diffSecs <= 0) {
+      return { value: 'Running...', sub: 'Publishing cycle in progress', active: true };
+    }
+    return {
+      value: formatDuration(diffSecs, false),
+      sub: `Next post at ${new Date(nextRunMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      active: true,
+    };
+  };
+
+  const getDailyResetTimer = () => {
+    const current = new Date(nowMs);
+    const nextMidnight = new Date(
+      current.getFullYear(),
+      current.getMonth(),
+      current.getDate() + 1,
+      0,
+      0,
+      0
+    );
+    const diffSecs = Math.max(0, Math.floor((nextMidnight.getTime() - nowMs) / 1000));
+    return {
+      value: formatDuration(diffSecs, true),
+      sub: 'Resets daily quota (00:00)',
+    };
+  };
+
+  const nextPostTimer = getNextPostTimer();
+  const dailyResetTimer = getDailyResetTimer();
+
   // Active Preview Modal
   const [previewArticle, setPreviewArticle] = useState(null);
 
@@ -96,16 +161,26 @@ export default function AdminPortal({ stats, onRefreshStats }) {
     localStorage.removeItem('worldgames_admin_token');
   };
 
-  // Fetch articles for management
-  const fetchAdminArticles = async () => {
-    setLoading(true);
+  const notifyPublicTabs = () => {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const ch = new BroadcastChannel('worldgames_updates');
+      ch.postMessage({ type: 'ARTICLES_UPDATED' });
+      ch.close();
+    }
+  };
+
+  // Fetch articles for management (supports silent live updates without table flicker)
+  const fetchAdminArticles = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) {
+      setLoading(true);
+    }
     try {
       let url = apiUrl('/api/v1/articles?limit=100');
       if (activeTab === 'IN_REVIEW') {
         url = apiUrl('/api/v1/publish/review-queue?limit=100');
       }
 
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         let list = data.articles || [];
@@ -117,15 +192,52 @@ export default function AdminPortal({ stats, onRefreshStats }) {
     } catch (e) {
       console.error('Failed to load admin articles:', e);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
-  };
+  }, [activeTab]);
 
   useEffect(() => {
     if (token) {
-      fetchAdminArticles();
+      fetchAdminArticles({ silent: false });
     }
-  }, [token, activeTab]);
+  }, [token, fetchAdminArticles]);
+
+  // Automatically refresh table whenever live backend stats change (e.g. daemon auto-publishes a story)
+  const lastAdminStatsSig = useRef(null);
+
+  useEffect(() => {
+    if (!token || !stats) return;
+    const sig = `${stats.total_articles ?? 0}:${stats.total_playbooks ?? 0}:${stats.total_news ?? 0}:${stats.in_review_count ?? 0}`;
+    if (lastAdminStatsSig.current === null) {
+      lastAdminStatsSig.current = sig;
+      return;
+    }
+    if (lastAdminStatsSig.current !== sig) {
+      lastAdminStatsSig.current = sig;
+      fetchAdminArticles({ silent: true });
+    }
+  }, [token, stats, fetchAdminArticles]);
+
+  // Background fallback sync every 10s & on tab focus
+  useEffect(() => {
+    if (!token) return;
+    const bgSync = setInterval(() => {
+      fetchAdminArticles({ silent: true });
+    }, 10000);
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') {
+        fetchAdminArticles({ silent: true });
+        if (onRefreshStats) onRefreshStats();
+      }
+    };
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      clearInterval(bgSync);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [token, fetchAdminArticles, onRefreshStats]);
 
   // Selection handlers
   const handleSelectAll = (e) => {
@@ -158,8 +270,9 @@ export default function AdminPortal({ stats, onRefreshStats }) {
         const data = await res.json();
         setActionMessage(data.message || 'Articles published successfully!');
         setSelectedIds([]);
-        fetchAdminArticles();
-        if (onRefreshStats) onRefreshStats();
+        await fetchAdminArticles({ silent: true });
+        if (onRefreshStats) await onRefreshStats();
+        notifyPublicTabs();
       }
     } catch (e) {
       console.error(e);
@@ -175,8 +288,9 @@ export default function AdminPortal({ stats, onRefreshStats }) {
       });
       if (res.ok) {
         setActionMessage(`Article ${id} published successfully.`);
-        fetchAdminArticles();
-        if (onRefreshStats) onRefreshStats();
+        await fetchAdminArticles({ silent: true });
+        if (onRefreshStats) await onRefreshStats();
+        notifyPublicTabs();
       }
     } catch (e) {
       console.error(e);
@@ -193,8 +307,9 @@ export default function AdminPortal({ stats, onRefreshStats }) {
       });
       if (res.ok) {
         setActionMessage(`Article ${id} deleted.`);
-        fetchAdminArticles();
-        if (onRefreshStats) onRefreshStats();
+        await fetchAdminArticles({ silent: true });
+        if (onRefreshStats) await onRefreshStats();
+        notifyPublicTabs();
       }
     } catch (e) {
       console.error(e);
@@ -228,8 +343,9 @@ export default function AdminPortal({ stats, onRefreshStats }) {
         const data = await res.json();
         setActionMessage(`[+] Generated: "${data.workflow_result?.article_title || 'Game Story'}" [Type: ${data.workflow_result?.article_type}, Score: ${data.workflow_result?.score}/10]`);
         setShowGenModal(false);
-        fetchAdminArticles();
-        if (onRefreshStats) onRefreshStats();
+        await fetchAdminArticles({ silent: true });
+        if (onRefreshStats) await onRefreshStats();
+        notifyPublicTabs();
       }
     } catch (e) {
       setActionMessage('Workflow execution failed.');
@@ -238,21 +354,37 @@ export default function AdminPortal({ stats, onRefreshStats }) {
     }
   };
 
+  // Automation Toggle Loading State
+  const [isTogglingAutomation, setIsTogglingAutomation] = useState(false);
+
   // Automation Daemon Toggle
   const toggleAutomation = async (start) => {
+    setIsTogglingAutomation(true);
     try {
       const endpoint = apiUrl(start ? '/api/v1/automation/start' : '/api/v1/automation/stop');
       const body = start ? JSON.stringify({ interval_seconds: 300 }) : undefined;
       const res = await fetch(endpoint, {
         method: 'POST',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body,
       });
       if (res.ok) {
-        if (onRefreshStats) onRefreshStats();
+        const data = await res.json().catch(() => ({}));
+        setActionMessage(
+          data.message || (start ? 'Autonomous daemon started.' : 'Autonomous daemon paused.')
+        );
+        if (onRefreshStats) {
+          await onRefreshStats();
+        }
+      } else {
+        setActionMessage(`Failed to ${start ? 'start' : 'pause'} daemon (Status ${res.status}).`);
       }
     } catch (e) {
       console.error(e);
+      setActionMessage(`Connection error while trying to ${start ? 'start' : 'pause'} daemon.`);
+    } finally {
+      setIsTogglingAutomation(false);
     }
   };
 
@@ -378,7 +510,7 @@ export default function AdminPortal({ stats, onRefreshStats }) {
           <div className="text-2xl font-black text-emerald-400">
             {stats?.daily_published ?? 0} <span className="text-sm font-normal text-slate-500">/ {stats?.daily_limit ?? 200}</span>
           </div>
-          <div className="text-[11px] text-slate-400">24-Hour Reset Cycle</div>
+          <div className="text-[11px] text-slate-400">Resets in <span className="font-mono text-emerald-400">{dailyResetTimer.value}</span></div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-1">
@@ -397,6 +529,45 @@ export default function AdminPortal({ stats, onRefreshStats }) {
           </div>
           <div className="text-2xl font-black text-sky-400">{stats?.average_score?.toFixed(1) ?? '9.0'}/10</div>
           <div className="text-[11px] text-slate-400">Quality Gate Rating</div>
+        </div>
+      </div>
+
+      {/* Live Timers & Autonomous Continuous Engine Controller */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between">
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400 flex items-center gap-1.5 font-medium">
+              <Clock className="w-4 h-4 text-sky-400" />
+              <span>Next Post Timer</span>
+            </div>
+            <div className={`text-2xl font-black font-mono ${nextPostTimer.active ? 'text-sky-400' : 'text-slate-400'}`}>
+              {nextPostTimer.value}
+            </div>
+            <div className="text-[11px] text-slate-400">{nextPostTimer.sub}</div>
+          </div>
+          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider border ${
+            nextPostTimer.active
+              ? 'bg-sky-500/15 text-sky-400 border-sky-500/30'
+              : 'bg-slate-800 text-slate-400 border-slate-700'
+          }`}>
+            {nextPostTimer.active ? 'Auto Cycle' : 'Idle'}
+          </span>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between">
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400 flex items-center gap-1.5 font-medium">
+              <Calendar className="w-4 h-4 text-amber-400" />
+              <span>Next 1-Day Reset Timer</span>
+            </div>
+            <div className="text-2xl font-black font-mono text-amber-400">
+              {dailyResetTimer.value}
+            </div>
+            <div className="text-[11px] text-slate-400">{dailyResetTimer.sub}</div>
+          </div>
+          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/30">
+            24h Window
+          </span>
         </div>
       </div>
 
@@ -423,18 +594,20 @@ export default function AdminPortal({ stats, onRefreshStats }) {
           {stats?.is_automation_running ? (
             <button
               onClick={() => toggleAutomation(false)}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-colors"
+              disabled={isTogglingAutomation}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 disabled:opacity-50 transition-colors"
             >
               <Square className="w-3.5 h-3.5 fill-current" />
-              Pause Daemon
+              {isTogglingAutomation ? 'Pausing...' : 'Pause Daemon'}
             </button>
           ) : (
             <button
               onClick={() => toggleAutomation(true)}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500 text-slate-950 hover:bg-emerald-400 transition-colors shadow-md shadow-emerald-500/20"
+              disabled={isTogglingAutomation}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500 text-slate-950 hover:bg-emerald-400 disabled:opacity-50 transition-colors shadow-md shadow-emerald-500/20"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
-              Start Daemon
+              {isTogglingAutomation ? 'Starting...' : 'Start Daemon'}
             </button>
           )}
         </div>
@@ -475,7 +648,7 @@ export default function AdminPortal({ stats, onRefreshStats }) {
             )}
 
             <button
-              onClick={fetchAdminArticles}
+              onClick={() => fetchAdminArticles({ silent: false })}
               className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors"
               title="Refresh Table"
             >

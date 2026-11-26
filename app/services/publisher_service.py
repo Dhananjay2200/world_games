@@ -389,6 +389,13 @@ class PublisherService:
         total_in_review = self.db.query(GameArticle).filter(GameArticle.status == "IN_REVIEW").count()
         total_topics = self.db.query(GameTopic).count()
 
+        from app.services.scheduler_service import SchedulerService
+        live_running = SchedulerService.is_running()
+        if auto_state and auto_state.is_running and not live_running:
+            auto_state.is_running = False
+            auto_state.next_run_at = None
+            self.db.commit()
+
         avg_score_res = self.db.query(func.avg(GameArticle.score)).scalar() or 0.0
 
         return {
@@ -400,8 +407,8 @@ class PublisherService:
             "in_review_count": total_in_review,
             "total_topics": total_topics,
             "average_score": round(float(avg_score_res), 2),
-            "is_automation_running": auto_state.is_running if auto_state else False,
-            "next_run_at": auto_state.next_run_at.isoformat() if auto_state and auto_state.next_run_at else None,
+            "is_automation_running": live_running,
+            "next_run_at": auto_state.next_run_at.isoformat() if (live_running and auto_state and auto_state.next_run_at) else None,
         }
 
     def get_cached_system_stats(self) -> Tuple[Dict[str, Any], str]:

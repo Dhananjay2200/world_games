@@ -21,9 +21,13 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle events: initialize database schema and performance indexes on startup."""
+    from app.services.scheduler_service import SchedulerService
     logger.info(f"Starting {settings.APP_NAME} in [{settings.APP_ENV}] mode...")
     init_models()
+    SchedulerService.reconcile_stale_state()
     yield
+    if SchedulerService.is_running():
+        await SchedulerService.stop_automation()
     logger.info(f"Shutting down {settings.APP_NAME}...")
 
 
