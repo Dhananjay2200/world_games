@@ -31,15 +31,15 @@ export function ArticleCard({ article, onSelect }) {
           }}
           className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500 ease-out"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#151A23] via-transparent to-black/25" />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#151A23] via-transparent to-black/45" />
 
-        {/* Color-Coded Tag Pill */}
+        {/* High-Contrast Color-Coded Tag Pill */}
         <div className="absolute top-3 left-3 flex items-center gap-1.5">
           <span
-            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-display font-bold uppercase tracking-wider border backdrop-blur-md ${badge.classes}`}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-display font-bold uppercase tracking-wider shadow-lg ring-1 ring-black/25 ${badge.solidClasses}`}
           >
             {article.article_type === 'NEWS' && (
-              <span className="w-1.5 h-1.5 rounded-full bg-[#EF4444] animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
             )}
             {badge.label}
           </span>
