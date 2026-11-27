@@ -103,9 +103,9 @@ class DiscoveryService:
         genre = target_genre or random.choice(GAME_CATEGORIES)
 
         # 1. First check unused curated seed bank games
-        existing_canonical = {
-            t.canonical_name for t in self.db.query(GameTopic.canonical_name).all()
-        }
+        existing_topics = self.db.query(GameTopic.name, GameTopic.canonical_name).all()
+        existing_canonical = {row[1] for row in existing_topics if row[1]}
+        existing_names_list = [row[0] for row in existing_topics if row[0]]
 
         for seed in CURATED_SEED_GAMES:
             c_key = generate_canonical_key(seed["name"])
@@ -121,64 +121,75 @@ class DiscoveryService:
                         "source": "curated_seed",
                     }
 
-        # 2. If seed is exhausted for this pair, use LLM to discover a novel game
-        llm = get_chat_llm(temperature=0.8, max_tokens=300)
-        prompt = f"""You are a global sports historian and traditional games ethnographer.
+        # 2. Try up to 3 region/genre attempts excluding already-covered games so Playbooks stay novel
+        llm = get_chat_llm(temperature=0.85, max_tokens=300)
+        avoid_sample = ", ".join(existing_names_list[-60:]) if existing_names_list else "None"
+
+        for attempt in range(3):
+            cur_region = target_region or (region if attempt == 0 else random.choice(WORLD_REGIONS))
+            cur_genre = target_genre or (genre if attempt == 0 else random.choice(GAME_CATEGORIES))
+
+            prompt = f"""You are a global sports historian and traditional games ethnographer.
 Identify 1 specific, real-world game or sport from the following parameters:
-- Region: {region}
-- Category: {genre}
+- Region: {cur_region}
+- Category: {cur_genre}
+
+ALREADY COVERED GAMES (DO NOT PICK ANY OF THESE OR THEIR VARIANTS):
+{avoid_sample}
 
 Return ONLY valid JSON with keys:
-- "name": string (Official or common English name of the game/sport)
-- "category": string ("{genre}")
-- "origin_region": string ("{region}")
+- "name": string (Official or common English name of a NEW game/sport not in the covered list)
+- "category": string ("{cur_genre}")
+- "origin_region": string ("{cur_region}")
 - "origin_country": string (Country or culture where it originated)
 - "brief_description": string (1-2 sentences on how it is played)
 
 Rules:
 - Must be a real, verifiable game played historically or currently.
-- Do NOT return generic terms (e.g. do not just say "Football" or "Tag"). Give the specific discipline (e.g. "Gaelic Football", "Sepak Takraw", "Kabaddi", "Kho-Kho", "Calcio Fiorentino").
+- Must NOT be any game from the ALREADY COVERED GAMES list above.
+- Do NOT return generic terms (e.g. do not just say "Football" or "Tag"). Give the specific discipline (e.g. "Gaelic Football", "Sepak Takraw", "Shinty", "Kho-Kho", "Pesäpallo").
 Do not include markdown code fences or other text."""
 
-        try:
-            response = await llm.ainvoke(prompt)
-            content = response.content.strip()
-            if content.startswith("```"):
-                content = content.strip("`").replace("json\n", "", 1).strip()
-            data = json.loads(content)
+            try:
+                response = await llm.ainvoke(prompt)
+                content = response.content.strip()
+                if content.startswith("```"):
+                    content = content.strip("`").replace("json\n", "", 1).strip()
+                data = json.loads(content)
 
-            c_key = generate_canonical_key(data["name"])
-            if c_key in existing_canonical:
-                # Fallback to random unused seed or append variation
-                for seed in CURATED_SEED_GAMES:
-                    s_key = generate_canonical_key(seed["name"])
-                    if s_key not in existing_canonical:
-                        return {
-                            "name": seed["name"],
-                            "canonical_name": s_key,
-                            "category": seed["category"],
-                            "origin_region": seed["region"],
-                            "origin_country": seed["country"],
-                            "source": "seed_fallback",
-                        }
+                c_key = generate_canonical_key(data["name"])
+                if c_key not in existing_canonical:
+                    return {
+                        "name": data["name"],
+                        "canonical_name": c_key,
+                        "category": data.get("category", cur_genre),
+                        "origin_region": data.get("origin_region", cur_region),
+                        "origin_country": data.get("origin_country", "Global"),
+                        "source": "llm_discovery",
+                    }
+                avoid_sample = f"{avoid_sample}, {data['name']}"
+            except Exception as e:
+                logger.warning(f"LLM discovery attempt {attempt + 1} error: {e}")
 
-            return {
-                "name": data["name"],
-                "canonical_name": c_key,
-                "category": data.get("category", genre),
-                "origin_region": data.get("origin_region", region),
-                "origin_country": data.get("origin_country", "Global"),
-                "source": "llm_discovery",
-            }
-        except Exception as e:
-            logger.warning(f"LLM discovery error, falling back to curated list: {e}")
-            # Safe fallback
-            fallback = random.choice(CURATED_SEED_GAMES)
-            return {
-                "name": fallback["name"],
-                "canonical_name": generate_canonical_key(fallback["name"]),
-                "category": fallback["category"],
-                "origin_region": fallback["region"],
-                "origin_country": fallback["country"],
-                "source": "emergency_seed",
-            }
+        # 3. Fallback to any unused seed game across any region/genre
+        for seed in CURATED_SEED_GAMES:
+            s_key = generate_canonical_key(seed["name"])
+            if s_key not in existing_canonical:
+                return {
+                    "name": seed["name"],
+                    "canonical_name": s_key,
+                    "category": seed["category"],
+                    "origin_region": seed["region"],
+                    "origin_country": seed["country"],
+                    "source": "seed_fallback",
+                }
+
+        fallback = random.choice(CURATED_SEED_GAMES)
+        return {
+            "name": fallback["name"],
+            "canonical_name": generate_canonical_key(fallback["name"]),
+            "category": fallback["category"],
+            "origin_region": fallback["region"],
+            "origin_country": fallback["country"],
+            "source": "emergency_seed",
+        }

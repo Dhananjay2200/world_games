@@ -14,6 +14,7 @@ from app.utils.logging import logger
 
 _scheduler_task: Optional[asyncio.Task] = None
 _stop_event = asyncio.Event()
+_dispatched_news_angles: set[str] = set()
 
 
 class SchedulerService:
@@ -105,9 +106,42 @@ class SchedulerService:
         return True
 
     @staticmethod
+    async def _pick_auto_news_candidate(db, prefer_source: str = "espn") -> Optional[dict]:
+        """Selects a fresh, unpublished breaking sports headline from ESPN and/or APITube."""
+        from app.config import get_settings
+        from app.database.models import GameArticle
+        from app.services.apitube_service import APITubeNewsService
+        from app.services.espn_news_service import ESPNNewsService
+
+        recent_news = (
+            db.query(GameArticle.title)
+            .filter(GameArticle.article_type == "NEWS")
+            .order_by(GameArticle.created_at.desc())
+            .limit(100)
+            .all()
+        )
+        existing_titles = {row[0] for row in recent_news if row[0]} | _dispatched_news_angles
+
+        candidate = None
+        if prefer_source == "espn":
+            candidate = await ESPNNewsService().pick_fresh_sports_story(existing_titles=existing_titles)
+            if not candidate and (get_settings().API_TUBE_KEY or "").strip():
+                candidate = await APITubeNewsService().pick_fresh_sports_story(existing_titles=existing_titles)
+        else:
+            if (get_settings().API_TUBE_KEY or "").strip():
+                candidate = await APITubeNewsService().pick_fresh_sports_story(existing_titles=existing_titles)
+            if not candidate:
+                candidate = await ESPNNewsService().pick_fresh_sports_story(existing_titles=existing_titles)
+
+        if candidate and candidate.get("news_angle"):
+            _dispatched_news_angles.add(candidate["news_angle"].lower().strip())
+        return candidate
+
+    @staticmethod
     async def _worker_loop(interval_seconds: int):
         from app.graph.workflow import run_single_game_workflow
 
+        cycle_idx = 0
         while not _stop_event.is_set():
             db = SessionLocal()
             try:
@@ -132,8 +166,60 @@ class SchedulerService:
                     await asyncio.wait_for(_stop_event.wait(), timeout=600)
                     continue
 
-                logger.info(f"[*] Automation triggering workflow cycle [{daily_count + 1}/{daily_limit}]...")
-                await run_single_game_workflow()
+                # Determine next cycle type from the last article in PostgreSQL so alternation stays exact across restarts:
+                # If last article was PLAYBOOK -> run NEWS next; if last was NEWS -> run PLAYBOOK next.
+                from app.database.models import GameArticle
+                last_art = db.query(GameArticle.article_type).order_by(GameArticle.id.desc()).first()
+                run_news_next = (last_art is not None and last_art[0] == "PLAYBOOK")
+
+                if run_news_next:
+                    news_source = "espn" if (cycle_idx % 2 == 0) else "apitube"
+                    candidate = await SchedulerService._pick_auto_news_candidate(db, prefer_source=news_source)
+                    if candidate:
+                        logger.info(
+                            f"[Scheduler] Last article was PLAYBOOK -> running LIVE NEWS ({news_source.upper()}) cycle [{daily_count + 1}/{daily_limit}]: "
+                            f"'{candidate['news_angle'][:60]}...'"
+                        )
+                        await run_single_game_workflow(
+                            topic_name=candidate["topic_name"],
+                            category=candidate["category"],
+                            region=candidate["region"],
+                            country=candidate["country"],
+                            article_type="NEWS",
+                            news_angle=candidate["news_angle"],
+                        )
+                    else:
+                        logger.info(f"[Scheduler] No fresh wire news available -> triggering PLAYBOOK cycle [{daily_count + 1}/{daily_limit}]...")
+                        await run_single_game_workflow()
+                else:
+                    logger.info(f"[Scheduler] Last article was NEWS (or initial) -> running PLAYBOOK cycle [{daily_count + 1}/{daily_limit}]...")
+                    pb_result = await run_single_game_workflow()
+                    pb_status = pb_result.get("status") if pb_result else None
+                    pb_topic = (pb_result.get("topic") or {}).get("name", "Unknown") if pb_result else "Unknown"
+
+                    if pb_status == "PLAYBOOK_EXISTS_SWITCHED_TO_NEWS":
+                        logger.info(
+                            f"[Scheduler] Playbook for '{pb_topic}' already exists -> moved to latest NEWS: "
+                            f"'{(pb_result.get('article') or {}).get('title', pb_result.get('news_angle', ''))[:70]}'"
+                        )
+                    elif pb_status == "DUPLICATE_REJECTED":
+                        fallback_source = "espn" if (cycle_idx % 2 == 0) else "apitube"
+                        candidate = await SchedulerService._pick_auto_news_candidate(db, prefer_source=fallback_source)
+                        if candidate:
+                            logger.info(
+                                f"[Scheduler] Playbook for '{pb_topic}' already exists (no sport-specific news) -> "
+                                f"moving to general latest NEWS: '{candidate['news_angle'][:60]}...'"
+                            )
+                            await run_single_game_workflow(
+                                topic_name=candidate["topic_name"],
+                                category=candidate["category"],
+                                region=candidate["region"],
+                                country=candidate["country"],
+                                article_type="NEWS",
+                                news_angle=candidate["news_angle"],
+                            )
+
+                cycle_idx += 1
 
                 # Re-query fresh state and update next run time only if still active
                 if not _stop_event.is_set():

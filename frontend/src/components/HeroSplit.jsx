@@ -1,7 +1,8 @@
 import React from 'react';
-import { Clock, MapPin, Zap, ArrowUpRight } from 'lucide-react';
+import { Clock, MapPin, Zap, ArrowUpRight, Calendar } from 'lucide-react';
 import {
   FALLBACK_IMAGE,
+  formatPublishedDate,
   formatRelativeTime,
   getSafeImageUrl,
   getTagBadgeStyle,
@@ -64,10 +65,15 @@ export default function HeroSplit({ articles = [], onSelectArticle }) {
               {leadStory.summary}
             </p>
           )}
-          <div className="mt-4 flex items-center gap-4 text-xs text-[#9CA3AF]">
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-[#9CA3AF]">
             <span className="inline-flex items-center gap-1.5 text-[#10B981] font-medium">
               <Clock className="w-3.5 h-3.5" />
               {leadStory.reading_time_minutes || 6} min read
+            </span>
+            <span>•</span>
+            <span className="inline-flex items-center gap-1.5 text-[#F3F4F6]/90 font-medium">
+              <Calendar className="w-3.5 h-3.5 text-[#7C3AED]" />
+              {formatPublishedDate(leadStory.published_at || leadStory.created_at)}
             </span>
             <span>•</span>
             <span>{formatRelativeTime(leadStory.published_at || leadStory.created_at)}</span>
@@ -116,7 +122,7 @@ export default function HeroSplit({ articles = [], onSelectArticle }) {
                         {badge.label}
                       </span>
                       <span className="text-[11px] font-mono text-[#9CA3AF] shrink-0">
-                        {formatRelativeTime(story.published_at || story.created_at)}
+                        {formatPublishedDate(story.published_at || story.created_at, false)} · {formatRelativeTime(story.published_at || story.created_at)}
                       </span>
                     </div>
 

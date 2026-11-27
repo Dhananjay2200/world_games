@@ -1,7 +1,8 @@
 import React from 'react';
-import { Clock, MapPin, ArrowUpRight } from 'lucide-react';
+import { Clock, MapPin, ArrowUpRight, Calendar } from 'lucide-react';
 import {
   FALLBACK_IMAGE,
+  formatPublishedDate,
   formatRelativeTime,
   getSafeImageUrl,
   getTagBadgeStyle,
@@ -48,14 +49,19 @@ export function ArticleCard({ article, onSelect }) {
       {/* Card Body */}
       <div className="p-5 flex-1 flex flex-col justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 text-[11px] text-[#9CA3AF] mb-2">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#9CA3AF] mb-2">
             {article.origin_country && (
-              <span className="inline-flex items-center gap-1 truncate">
+              <span className="inline-flex items-center gap-1 truncate max-w-[140px]">
                 <MapPin className="w-3 h-3 text-[#7C3AED] shrink-0" />
                 <span className="truncate">{article.origin_country}</span>
               </span>
             )}
             {article.origin_country && <span>•</span>}
+            <span className="inline-flex items-center gap-1 shrink-0 font-mono text-[#F3F4F6]/80">
+              <Calendar className="w-3 h-3 text-[#10B981]" />
+              {formatPublishedDate(article.published_at || article.created_at)}
+            </span>
+            <span>•</span>
             <span className="shrink-0 font-mono">
               {formatRelativeTime(article.published_at || article.created_at)}
             </span>

@@ -10,10 +10,32 @@ export function getSafeImageUrl(url) {
   return url;
 }
 
+export function parseUtcDate(dateInput) {
+  if (!dateInput) return null;
+  if (dateInput instanceof Date) {
+    return Number.isNaN(dateInput.getTime()) ? null : dateInput;
+  }
+  const str = String(dateInput).trim();
+  if (!str) return null;
+  // Backend emits naive UTC ISO timestamps (datetime.utcnow().isoformat()); append 'Z' when missing
+  const hasZone = /([zZ]|[+-]\d{2}:\d{2})$/.test(str);
+  const parsed = new Date(hasZone ? str : `${str}Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function formatPublishedDate(dateInput, includeYear = true) {
+  const parsed = parseUtcDate(dateInput);
+  if (!parsed) return 'Recent';
+  return parsed.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    ...(includeYear ? { year: 'numeric' } : {}),
+  });
+}
+
 export function formatRelativeTime(dateInput) {
-  if (!dateInput) return 'Recent';
-  const parsed = new Date(dateInput);
-  if (Number.isNaN(parsed.getTime())) return 'Recent';
+  const parsed = parseUtcDate(dateInput);
+  if (!parsed) return 'Recent';
 
   const diffSeconds = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
   if (diffSeconds < 60) return 'Just now';
@@ -23,7 +45,7 @@ export function formatRelativeTime(dateInput) {
   if (diffHours < 24) return `${diffHours}h ago`;
   const diffDays = Math.floor(diffHours / 24);
   if (diffDays < 30) return `${diffDays}d ago`;
-  return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatPublishedDate(parsed, true);
 }
 
 export function parseKeywords(seoKeywords) {

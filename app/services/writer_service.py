@@ -3,6 +3,7 @@ WorldGames AI - Editorial Writer Service.
 Generates comprehensive 12-section encyclopedic guides OR dynamic sports news dispatches.
 """
 
+from datetime import date
 from typing import Dict, Optional
 from app.llm import get_chat_llm
 from app.utils.logging import logger
@@ -32,35 +33,31 @@ Format guidelines:
 - Maintain an authoritative, vibrant, engaging, and culturally respectful voice.
 """
 
-SYSTEM_NEWS_PROMPT = """You are a senior investigative sports correspondent and breaking news editor for WorldGames AI.
-Your task is to write an authoritative, timely sports news dispatch or tournament report covering the specified sport/event.
+SYSTEM_NEWS_PROMPT = """You are a senior breaking sports journalist and editor for WorldGames.
+Your task is to write a timely, factual, publication-grade sports news dispatch grounded strictly in the latest verified news items and timestamps provided in the prompt.
 
-You MUST format the news story in structured Markdown:
+Format requirements:
+# [Punchy, Accurate Breaking News Headline]
 
-# [Punchy, Professional Sports News Headline]
+## 1. Breaking Lead & Key Takeaways
+- Concise summary of the latest development, dates, teams/athletes, and verified facts.
 
-## 1. Executive Summary & Key Takeaways
-- The headline event, key score/outcome, and what transpired.
+## 2. Story Context & Significance
+- Why this news matters right now for the sport, league, or upcoming competition.
 
-## 2. Tournament Context & Historical Stakes
-- Why this championship, league match, or breaking development matters.
+## 3. Detailed Breakdown & Key Highlights
+- Specific details from the reported news findings (transfers, match developments, announcements, or rule/tournament updates).
 
-## 3. Game Progression & Critical Turning Points
-- Play-by-play narrative highlighting game-changing plays, clutch defensive stands, and turning moments. Include a Markdown table summarizing key periods or score progression.
+## 4. Key Figures, Teams & Sources
+- Bullet points or a clean Markdown table summarizing the verified parties, dates, and developments mentioned in the sources.
 
-## 4. Outstanding Athletes & MVP Performances
-- Individual excellence, record-setting statistics, and superstar contributions.
+## 5. What Lies Ahead
+- Immediate next fixtures, deadlines, or impact on upcoming events.
 
-## 5. Tactical Breakdown & Strategies
-- Formations, tactical maneuvers, and strategic decisions that decided the contest.
-
-## 6. League Standings & What Lies Ahead
-- Repercussions on the championship race, upcoming fixtures, and official quotes/reactions.
-
-Format guidelines:
-- Active, journalistic, high-energy tone.
-- Length: 800 - 1200 words.
-- Clean Markdown with headers, quotes, and tables where relevant.
+Strict rules:
+- Prioritize the latest news findings (with their `Published` timestamps and `Source`) over historical background.
+- Do NOT invent fake scores, fake quotes, or outdated past-year results.
+- Active journalistic tone, 650–1100 words, clean Markdown.
 """
 
 
@@ -79,20 +76,32 @@ class WriterService:
         findings_text = "\n".join([f"- {f.get('title')}: {f.get('content')}" for f in findings[:5]])
 
         if article_type == "NEWS":
-            logger.info(f"Generating Sports News for: {topic_name} (Angle: {news_angle or 'Recent Tournaments & League Highlights'})")
-            user_prompt = f"""Write an authoritative, breaking sports news report for the sport:
-- Sport: {topic_name}
-- Category: {category}
-- Origin Region: {region} ({country})
-- News Angle / Topic: {news_angle or 'Championship Finals, League Highlights & Rule Updates'}
+            today_str = date.today().isoformat()
+            news_items = (
+                research_dossier.get("live_news")
+                or research_dossier.get("apitube_news")
+                or findings
+            )
+            live_news_text = "\n".join([
+                f"- [{f.get('published_at') or 'Recent'} | {f.get('source') or 'Wire'}] "
+                f"{f.get('title')}: {f.get('content')} (URL: {f.get('url', '')})"
+                for f in news_items[:6]
+            ]) or findings_text
 
-Research & Background Context:
-{wiki_summary}
+            logger.info(f"Generating Latest Sports News for: {topic_name} (Date: {today_str}, Angle: {news_angle or 'Latest Live Headlines'})")
+            user_prompt = f"""Today's Date: {today_str}
+Sport / Topic: {topic_name}
+Category: {category}
+Region: {region} ({country})
+Requested Focus / Angle: {news_angle or 'Report the most recent breaking news from the live wire findings below'}
 
-Recent News Findings:
-{findings_text}
+LATEST LIVE NEWS WIRE FINDINGS (Primary Source — prioritize newest timestamps):
+{live_news_text}
 
-Generate the full markdown sports news article following the 6 news sections."""
+Brief Sport Context (Secondary background only):
+{wiki_summary[:600]}
+
+Write the breaking sports news article strictly grounded in the latest news wire findings above."""
 
             response = await self.llm.ainvoke([
                 {"role": "system", "content": SYSTEM_NEWS_PROMPT},
@@ -101,13 +110,26 @@ Generate the full markdown sports news article following the 6 news sections."""
             full_content = response.content.strip()
 
             lines = full_content.splitlines()
-            title = f"{topic_name}: {news_angle or 'Championship Clash & Latest News'}"
+            title = f"{topic_name}: {news_angle or 'Latest Breaking News & Updates'}"
+            found_title = False
+            summary_candidates = []
             for l in lines:
-                if l.startswith("# "):
-                    title = l.replace("# ", "").strip()
-                    break
+                stripped = l.strip()
+                if stripped.startswith("# ") and not found_title:
+                    title = stripped.replace("# ", "").strip()
+                    found_title = True
+                elif stripped and not stripped.startswith("#") and not stripped.startswith("|"):
+                    clean_line = stripped.lstrip("-* ").replace("**", "").strip()
+                    if len(clean_line) > 40:
+                        summary_candidates.append(clean_line)
+                        if len(summary_candidates) >= 2:
+                            break
 
-            summary = f"Breaking news and tournament dispatch on {topic_name} ({category}): analysis of pivotal plays, standout champions, and latest league standings."
+            summary = (
+                " ".join(summary_candidates)[:280]
+                if summary_candidates
+                else f"Latest breaking news dispatch covering {topic_name} ({category})."
+            )
 
             return {
                 "title": title,

@@ -4,9 +4,12 @@ Integrates Wikipedia REST/Action API, Wikidata, and Tavily Search API to gather
 authentic facts, rules, dimensions, equipment, and historical context.
 """
 
+from datetime import date
 from typing import Dict, List, Optional
 import httpx
 from app.config import get_settings
+from app.services.apitube_service import APITubeNewsService
+from app.services.espn_news_service import ESPNNewsService
 from app.utils.logging import logger
 
 
@@ -46,19 +49,37 @@ class ResearchService:
             logger.warning(f"Wikipedia fetch error for '{topic_name}': {e}")
         return None
 
-    async def fetch_tavily_research(self, topic_name: str, category: str) -> List[Dict]:
-        """Queries Tavily Search API for game rules, equipment, and tournament records."""
+    async def fetch_tavily_research(
+        self,
+        topic_name: str,
+        category: str,
+        article_type: str = "PLAYBOOK",
+        news_angle: Optional[str] = None,
+    ) -> List[Dict]:
+        """Queries Tavily Search API for rules (PLAYBOOK) or latest breaking news (NEWS)."""
         if not self.settings.TAVILY_API_KEY or self.settings.TAVILY_API_KEY.startswith("tvly-placeholder"):
             return []
 
         url = "https://api.tavily.com/search"
-        payload = {
-            "api_key": self.settings.TAVILY_API_KEY,
-            "query": f"{topic_name} {category} official rules equipment field dimensions history tournaments",
-            "search_depth": self.settings.TAVILY_SEARCH_DEPTH,
-            "include_answer": True,
-            "max_results": 5,
-        }
+        current_year = date.today().year
+        if article_type == "NEWS":
+            query_text = f"{topic_name} {news_angle or 'latest breaking news results tournament'} {current_year}"
+            payload = {
+                "api_key": self.settings.TAVILY_API_KEY,
+                "query": query_text,
+                "topic": "news",
+                "search_depth": self.settings.TAVILY_SEARCH_DEPTH,
+                "include_answer": True,
+                "max_results": 5,
+            }
+        else:
+            payload = {
+                "api_key": self.settings.TAVILY_API_KEY,
+                "query": f"{topic_name} {category} official rules equipment field dimensions history tournaments",
+                "search_depth": self.settings.TAVILY_SEARCH_DEPTH,
+                "include_answer": True,
+                "max_results": 5,
+            }
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -80,10 +101,76 @@ class ResearchService:
             logger.warning(f"Tavily search error for '{topic_name}': {e}")
         return []
 
-    async def gather_full_research(self, topic_name: str, category: str, region: str, country: str) -> Dict:
-        """Assembles research dossier from Wikipedia and Tavily."""
+    async def fetch_espn_news(self, topic_name: str, news_angle: Optional[str] = None) -> List[Dict]:
+        """Queries ESPN live sports news API for Cricket and global sports headlines."""
+        service = ESPNNewsService()
+        query = (topic_name or "").strip() or "sports"
+        items = await service.fetch_sports_news(query=query, limit=5)
+        if not items and news_angle:
+            # Try general sports feed or match keywords from news_angle
+            items = await service.fetch_sports_news(query="sports", limit=5)
+        elif not items:
+            items = await service.fetch_sports_news(query="sports", limit=5)
+        return [
+            {
+                "title": item.get("title", ""),
+                "content": item.get("story_text") or item.get("description", ""),
+                "url": item.get("url", ""),
+                "published_at": item.get("published_at"),
+                "source": item.get("source_name", "ESPN"),
+            }
+            for item in items
+        ]
+
+    async def fetch_apitube_news(self, topic_name: str, news_angle: Optional[str] = None) -> List[Dict]:
+        """Queries APITube News API for recent live sports news matching the topic or general sports."""
+        service = APITubeNewsService()
+        query = (topic_name or "").strip() or "sports"
+        items = await service.fetch_sports_news(query=query, limit=5)
+        if not items:
+            # Fallback to latest breaking global sports headlines if niche sport name had no exact title match
+            items = await service.fetch_sports_news(query="sports", limit=5)
+        return [
+            {
+                "title": item.get("title", ""),
+                "content": item.get("description", ""),
+                "url": item.get("url", ""),
+                "published_at": item.get("published_at"),
+                "source": item.get("source_name", "APITube"),
+            }
+            for item in items
+        ]
+
+    async def gather_full_research(
+        self,
+        topic_name: str,
+        category: str,
+        region: str,
+        country: str,
+        article_type: str = "PLAYBOOK",
+        news_angle: Optional[str] = None,
+    ) -> Dict:
+        """Assembles research dossier from Wikipedia, Tavily, and (for NEWS) ESPN + APITube."""
         wiki_data = await self.fetch_wikipedia_summary(topic_name)
-        tavily_data = await self.fetch_tavily_research(topic_name, category)
+        tavily_data = await self.fetch_tavily_research(
+            topic_name,
+            category,
+            article_type=article_type,
+            news_angle=news_angle,
+        )
+        espn_data = (
+            await self.fetch_espn_news(topic_name, news_angle=news_angle)
+            if article_type == "NEWS"
+            else []
+        )
+        apitube_data = (
+            await self.fetch_apitube_news(topic_name, news_angle=news_angle)
+            if article_type == "NEWS"
+            else []
+        )
+
+        live_news = espn_data + apitube_data
+        combined_findings = live_news + tavily_data
 
         dossier = {
             "topic_name": topic_name,
@@ -91,7 +178,14 @@ class ResearchService:
             "origin_region": region,
             "origin_country": country,
             "wikipedia_summary": wiki_data.get("extract") if wiki_data else "",
-            "search_findings": tavily_data,
-            "citations": [r.get("url") for r in tavily_data if r.get("url") and r.get("url") != "tavily_answer"],
+            "search_findings": combined_findings,
+            "espn_news": espn_data,
+            "apitube_news": apitube_data,
+            "live_news": live_news,
+            "citations": [
+                r.get("url")
+                for r in combined_findings
+                if r.get("url") and r.get("url") != "tavily_answer"
+            ],
         }
         return dossier

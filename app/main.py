@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from app.config import get_settings
 from app.database.session import init_models
-from app.api.routes import health, topics, articles, publishing, workflow, automation, auth
+from app.api.routes import health, topics, articles, publishing, workflow, automation, auth, news
 from app.utils.logging import logger
 
 settings = get_settings()
@@ -61,6 +61,7 @@ app.include_router(publishing.router, prefix=API_V1_PREFIX)
 app.include_router(workflow.router, prefix=API_V1_PREFIX)
 app.include_router(automation.router, prefix=API_V1_PREFIX)
 app.include_router(auth.router, prefix=API_V1_PREFIX)
+app.include_router(news.router, prefix=API_V1_PREFIX)
 
 
 @app.get("/")

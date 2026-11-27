@@ -12,6 +12,7 @@ import {
 import { fetchFeed } from '../services/api';
 import {
   FALLBACK_IMAGE,
+  formatPublishedDate,
   formatRelativeTime,
   getSafeImageUrl,
   getTagBadgeStyle,
@@ -138,12 +139,7 @@ export default function ArticleDetail({ article, onBack, onSelectArticle }) {
           {publishedDate && (
             <span className="inline-flex items-center gap-1.5">
               <Calendar className="w-3.5 h-3.5 text-[#7C3AED]" />
-              {new Date(publishedDate).toLocaleDateString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-              })}{' '}
-              ({formatRelativeTime(publishedDate)})
+              {formatPublishedDate(publishedDate)} ({formatRelativeTime(publishedDate)})
             </span>
           )}
           <span className="inline-flex items-center gap-1.5">

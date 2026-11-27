@@ -12,6 +12,8 @@ from app.services.seo_service import SEOService
 from app.services.image_service import ImageService
 from app.services.evaluator_service import EvaluatorService
 from app.services.publisher_service import PublisherService
+from app.services.espn_news_service import ESPNNewsService
+from app.services.apitube_service import APITubeNewsService
 from app.database.session import SessionLocal
 from app.database.models import GameTopic, GameArticle
 from app.utils.logging import logger
@@ -77,7 +79,56 @@ async def deduplicate_node(state: WorldGamesState) -> Dict[str, Any]:
             ).first()
 
             if existing_playbook:
-                logger.warning(f"[Workflow] Playbook already exists for '{topic.get('name')}'. Ending pipeline.")
+                topic_name = topic.get("name", "")
+                logger.info(
+                    f"[Deduplicate] Playbook for sport '{topic_name}' already exists in DB -> moving to latest NEWS check (ESPN & APITube)..."
+                )
+
+                recent_news_rows = (
+                    db.query(GameArticle.title)
+                    .filter(GameArticle.article_type == "NEWS")
+                    .order_by(GameArticle.created_at.desc())
+                    .limit(100)
+                    .all()
+                )
+                seen_titles = {r[0].lower().strip() for r in recent_news_rows if r[0]}
+
+                live_candidates = await ESPNNewsService().fetch_sports_news(query=topic_name, limit=5)
+                if not live_candidates:
+                    live_candidates = await APITubeNewsService().fetch_sports_news(query=topic_name, limit=5)
+
+                # If exact multi-word name returned 0 hits (e.g. 'Amateur Wrestling' or 'Australian Rules Football (AFL)'),
+                # try the primary sport noun/keyword (without parentheticals or modifiers)
+                if not live_candidates:
+                    base_clean = topic_name.split("(")[0].strip()
+                    words = [w for w in base_clean.split() if len(w) > 3]
+                    if words:
+                        short_kw = words[-1]
+                        live_candidates = await ESPNNewsService().fetch_sports_news(query=short_kw, limit=5)
+                        if not live_candidates:
+                            live_candidates = await APITubeNewsService().fetch_sports_news(query=short_kw, limit=5)
+
+                for item in live_candidates:
+                    headline = (item.get("title") or "").strip()
+                    if not headline:
+                        continue
+                    h_lower = headline.lower()
+                    if any(h_lower in s or s in h_lower or h_lower[:35] in s for s in seen_titles):
+                        continue
+
+                    logger.info(
+                        f"[Workflow] Playbook for '{topic_name}' already exists -> moving immediately to latest NEWS: '{headline[:70]}'"
+                    )
+                    return {
+                        "is_duplicate": False,
+                        "article_type": "NEWS",
+                        "news_angle": headline,
+                        "status": "PLAYBOOK_EXISTS_SWITCHED_TO_NEWS",
+                    }
+
+                logger.warning(
+                    f"[Workflow] Playbook already exists for '{topic_name}' and no new live news was found. Ending pipeline."
+                )
                 return {"is_duplicate": True, "status": "DUPLICATE_REJECTED"}
             return {"is_duplicate": False, "status": "NOVEL_PLAYBOOK"}
     finally:
@@ -94,6 +145,8 @@ async def research_node(state: WorldGamesState) -> Dict[str, Any]:
         category=topic["category"],
         region=topic["origin_region"],
         country=topic.get("origin_country", "Global"),
+        article_type=state.get("article_type", "PLAYBOOK"),
+        news_angle=state.get("news_angle"),
     )
     return {"research": dossier}
 
@@ -151,6 +204,7 @@ async def quality_node(state: WorldGamesState) -> Dict[str, Any]:
         topic_name=topic["name"],
         category=topic["category"],
         content=article["content"],
+        article_type=state.get("article_type", "PLAYBOOK"),
     )
     rev_count = state.get("revision_count", 0)
     evaluation["revision_count"] = rev_count

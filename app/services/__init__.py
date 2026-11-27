@@ -9,6 +9,8 @@ from app.services.evaluator_service import EvaluatorService
 from app.services.publisher_service import PublisherService
 from app.services.scheduler_service import SchedulerService
 from app.services.cache_service import cache_service
+from app.services.apitube_service import APITubeNewsService
+from app.services.espn_news_service import ESPNNewsService, get_latest_sports_news
 
 __all__ = [
     "DiscoveryService",
@@ -22,4 +24,7 @@ __all__ = [
     "PublisherService",
     "SchedulerService",
     "cache_service",
+    "APITubeNewsService",
+    "ESPNNewsService",
+    "get_latest_sports_news",
 ]

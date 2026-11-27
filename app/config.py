@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     # Research & Search API Configuration
     TAVILY_API_KEY: str = ""
     TAVILY_SEARCH_DEPTH: str = "advanced"
+    API_TUBE_KEY: str = ""
+    API_TUBE_BASE_URL: str = "https://api.apitube.io/v1"
+
+    @field_validator("API_TUBE_KEY", mode="before")
+    @classmethod
+    def strip_apitube_key(cls, v: Any) -> str:
+        return v.strip() if isinstance(v, str) else (str(v).strip() if v else "")
 
     # Permitted Image Provider Keys (Wikimedia Commons is default free provider)
     UNSPLASH_ACCESS_KEY: str = ""

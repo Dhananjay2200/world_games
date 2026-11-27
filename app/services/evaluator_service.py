@@ -65,15 +65,58 @@ Respond in strict JSON:
 Do not output markdown code ticks or any extra text outside the JSON object."""
 
 
+NEWS_EVALUATION_SYSTEM_PROMPT = """You are the Senior Sports News Desk Editor for WorldGames AI.
+Your responsibility is to audit a breaking sports news article for journalistic quality:
+1. Timeliness & Relevance (Does it focus on current news rather than generic history?)
+2. Factual Grounding (Is it consistent with the reported news facts without fabricated scores?)
+3. Headline & Lead Clarity (Is the # headline and opening section punchy and informative?)
+4. Structure & Readability (Clear ## Markdown sections, scannable facts, clean tables/lists)
+5. Accuracy & Tone (Professional, energetic sports journalism)
+
+Score from 1 to 10, then provide overall_score (0.0 to 10.0).
+
+Respond in strict JSON:
+{
+  "overall_score": float,
+  "passed": boolean,
+  "criteria_scores": {
+    "Timeliness & Relevance": int,
+    "Factual Grounding": int,
+    "Headline & Lead Clarity": int,
+    "Structure & Readability": int,
+    "Accuracy & Tone": int
+  },
+  "strengths": string,
+  "deficiencies": string,
+  "actionable_feedback": string
+}
+Do not output markdown code ticks or any extra text outside the JSON object."""
+
+
 class EvaluatorService:
     def __init__(self):
         self.settings = get_settings()
         self.eval_llm = get_chat_llm(temperature=0.2, max_tokens=1000)
         self.revision_llm = get_chat_llm(temperature=0.6, max_tokens=4000)
 
-    async def evaluate_article(self, topic_name: str, category: str, content: str) -> Dict:
-        """Evaluates article across 11 dimensions."""
-        user_prompt = f"""Review the following guide for the sport/game '{topic_name}' ({category}):
+    async def evaluate_article(
+        self,
+        topic_name: str,
+        category: str,
+        content: str,
+        article_type: str = "PLAYBOOK",
+    ) -> Dict:
+        """Evaluates article across 11 dimensions (PLAYBOOK) or news editorial rubric (NEWS)."""
+        if article_type == "NEWS":
+            sys_prompt = NEWS_EVALUATION_SYSTEM_PROMPT
+            user_prompt = f"""Review this breaking sports news article for '{topic_name}' ({category}):
+
+{content}
+
+Minimum passing threshold is {self.settings.DEFAULT_QUALITY_THRESHOLD}/10.0."""
+        else:
+            sys_prompt = EVALUATION_SYSTEM_PROMPT
+            user_prompt = f"""Review the following guide for the sport/game '{topic_name}' ({category}):
 
 {content}
 
@@ -81,7 +124,7 @@ Perform full 11-dimension inspection. Minimum passing threshold is {self.setting
 
         try:
             resp = await self.eval_llm.ainvoke([
-                {"role": "system", "content": EVALUATION_SYSTEM_PROMPT},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_prompt}
             ])
             text = resp.content.strip()
