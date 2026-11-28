@@ -12,6 +12,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from app.config import get_settings
 
@@ -37,6 +39,22 @@ def _stream_output(proc: subprocess.Popen, prefix: str) -> None:
             print(f"[{prefix}] {line.rstrip()}", flush=True)
     except Exception:
         pass
+
+
+def _wait_for_backend(host: str, port: int, proc: subprocess.Popen, timeout_sec: float = 45.0) -> bool:
+    """Waits until FastAPI finishes lifespan startup and returns HTTP 200 on '/'."""
+    url = f"http://{host}:{port}/"
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return False
+        try:
+            with urllib.request.urlopen(url, timeout=1.5) as resp:
+                if resp.status == 200:
+                    return True
+        except (urllib.error.URLError, OSError):
+            time.sleep(0.4)
+    return False
 
 
 def _terminate_tree(proc: subprocess.Popen, name: str) -> None:
@@ -89,6 +107,10 @@ def main() -> int:
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env["VITE_BACKEND_HOST"] = settings.HOST
+    env["VITE_BACKEND_PORT"] = str(settings.PORT)
+    # Ensure Vite dev proxy handles /api calls locally instead of stale ports
+    env.setdefault("VITE_BASE_URL", "")
 
     backend_cmd = [sys.executable, str(ROOT_DIR / "run_server.py")]
     frontend_cmd = [npm_exe, "run", "dev", "--", "--host", "127.0.0.1", "--port", "5174"]
@@ -105,6 +127,17 @@ def main() -> int:
         bufsize=1,
     )
 
+    t_back = threading.Thread(target=_stream_output, args=(backend_proc, "BACKEND"), daemon=True)
+    t_back.start()
+
+    print(f"[*] Waiting for backend on http://{settings.HOST}:{settings.PORT} to become ready...")
+    if not _wait_for_backend(settings.HOST, settings.PORT, backend_proc, timeout_sec=45.0):
+        print("[-] Backend failed to bind port before timeout. Shutting down...")
+        _terminate_tree(backend_proc, "Backend")
+        return 1
+
+    print(f"[+] Backend is ready on http://{settings.HOST}:{settings.PORT}! Starting Frontend...")
+
     frontend_proc = subprocess.Popen(
         frontend_cmd,
         cwd=str(FRONTEND_DIR),
@@ -117,9 +150,7 @@ def main() -> int:
         bufsize=1,
     )
 
-    t_back = threading.Thread(target=_stream_output, args=(backend_proc, "BACKEND"), daemon=True)
     t_front = threading.Thread(target=_stream_output, args=(frontend_proc, "FRONTEND"), daemon=True)
-    t_back.start()
     t_front.start()
 
     stop_requested = False
