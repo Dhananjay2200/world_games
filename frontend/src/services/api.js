@@ -1,12 +1,13 @@
 /**
  * World Games - Dedicated API Client
- * Connects cleanly to the FastAPI backend via VITE_API_URL (or Vite /api proxy in local dev).
+ * Uses VITE_BASE_URL (or VITE_API_URL / VITE_API_BASE_URL), defaulting to the Render backend URL.
  */
 
 const rawBase =
-  import.meta.env.VITE_API_URL ||
-  import.meta.env.VITE_API_BASE_URL ||
-  '';
+  import.meta.env.VITE_BASE_URL ??
+  import.meta.env.VITE_API_URL ??
+  import.meta.env.VITE_API_BASE_URL ??
+  'https://world-games-lhi1.onrender.com';
 
 export const API_BASE = rawBase.replace(/\/+$/, '');
 
